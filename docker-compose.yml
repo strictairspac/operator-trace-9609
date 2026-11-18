@@ -1,0 +1,72 @@
+name: ${COMPOSE_PROJECT_NAME:-operator-trace}
+x-app: &app
+  build: ./backend
+  environment:
+    DATABASE_URL: postgresql+psycopg://trace:tracepass@db:5432/operatortrace
+    REDIS_URL: redis://redis:6379/0
+    JWT_SECRET: ${JWT_SECRET:-operator-trace-local-demo-secret-change-before-use}
+    SEED_DEMO: ${SEED_DEMO:-true}
+  volumes:
+    - artifacts:/artifacts
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_healthy}
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-operator-trace}-db
+    environment: {POSTGRES_DB: operatortrace, POSTGRES_USER: trace, POSTGRES_PASSWORD: tracepass}
+    ports: ["${DB_PORT:-17744}:5432"]
+    volumes: ["dbdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trace -d operatortrace"]
+      interval: 5s
+      timeout: 4s
+      retries: 35
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-operator-trace}-redis
+    command: [redis-server, --appendonly, 'yes']
+    volumes: ["redisdata:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  backend:
+    <<: *app
+    container_name: ${COMPOSE_PROJECT_NAME:-operator-trace}-backend
+    ports: ["${BACKEND_PORT:-19244}:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  worker:
+    <<: *app
+    container_name: ${COMPOSE_PROJECT_NAME:-operator-trace}-worker
+    command: ["python", "-m", "src.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat('/tmp/worker-heartbeat').st_mtime<60"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend: {condition: service_healthy}
+  frontend:
+    build: ./frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-operator-trace}-frontend
+    ports: ["${FRONTEND_PORT:-18244}:80"]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  dbdata:
+  redisdata:
+  artifacts:
