@@ -28,3 +28,10 @@ class PlanInput(BaseModel):
 class TraceInput(BaseModel):
  name:str=Field(min_length=2,max_length=120)
  plan_id:int
+class ReplayInput(BaseModel):
+ name:str=Field(min_length=2,max_length=120)
+ base_trace_id:int
+ target_trace_id:int
+class ReplayPrecheck(BaseModel):
+ base_trace_id:int
+ target_trace_id:int

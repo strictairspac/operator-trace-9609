@@ -3,6 +3,8 @@ from src.models.identity import User,Audit
 from src.models.dataset import Dataset
 from src.models.plan import Plan
 from src.models.trace import Trace
+from src.models.replay import ReplayJob,ReplayTrial
+from src.services.operators import execute
 from src.utils.security import hash_password
 DEFAULT_STEPS=[{'op':'scan','source':'readings'},{'op':'filter','field':'value','compare':'gte','value':50},{'op':'hash_join','right':'sensors','left_key':'sensor_id','right_key':'sensor_id'},{'op':'group','keys':['zone'],'measure':'value','aggregate':'avg'}]
 def seed():
@@ -19,5 +21,26 @@ def seed():
   for i,(name,_,_,_) in enumerate(seeds):
    pname=['过滤-连接-分组基线','空输入管线','重复键内连接'][i]
    if not s.query(Plan).filter_by(name=pname).first():s.add(Plan(name=pname,dataset_id=s.query(Dataset).filter_by(name=name).one().id,steps=DEFAULT_STEPS,note='受限DSL，Python算子真实执行'))
-  s.commit();counts={m.__tablename__:s.query(m).count() for m in (User,Dataset,Plan,Trace)};print(counts);return counts
+  s.flush()
+  _seed_replay_archives(s,sensors,readings)
+  s.commit();counts={m.__tablename__:s.query(m).count() for m in (User,Dataset,Plan,Trace,ReplayJob,ReplayTrial)};print(counts);return counts
+def _seed_replay_archives(s,sensors,readings):
+ # Two archives of the same class: identical plan + sensor table, later class
+ # only overwrote the reading groups of two sensors (ids 2 and 7).
+ pair=('课上第一次分组存档','课上第二次分组存档')
+ if s.query(Trace).filter(Trace.name.in_(pair)).first():return
+ base_readings=[dict(r) for r in readings]
+ target_readings=[dict(r) for r in readings]
+ for r in target_readings:
+  if r['sensor_id'] in (2,7):r['value']=round(r['value']+12.5,1)
+ base_ds=Dataset(name=pair[0],sensors=[dict(x) for x in sensors],readings=base_readings,description='复现试算基准：第一次课的采样存档')
+ target_ds=Dataset(name=pair[1],sensors=[dict(x) for x in sensors],readings=target_readings,description='复现目标：第二次课的采样存档，仅传感器2/7整组采样有改动')
+ s.add_all([base_ds,target_ds]);s.flush()
+ plan=Plan(name='两次分组复核同一算子',dataset_id=base_ds.id,steps=DEFAULT_STEPS,note='复现试算固定使用原算子序列')
+ s.add(plan);s.flush()
+ for ds in (base_ds,target_ds):
+  snap_ds={'id':ds.id,'name':ds.name,'description':ds.description,'sensors':ds.sensors,'readings':ds.readings}
+  snap_plan={'id':plan.id,'name':plan.name,'dataset_id':plan.dataset_id,'steps':DEFAULT_STEPS,'note':plan.note}
+  result=execute(snap_ds,DEFAULT_STEPS)
+  s.add(Trace(name=pair[0] if ds is base_ds else pair[1],plan_id=plan.id,dataset_id=ds.id,status='completed',result=result,snapshot={'dataset':snap_ds,'plan':snap_plan}))
 if __name__=='__main__':seed()
